@@ -1,0 +1,534 @@
+# sManager Complete User Journey - Registration to Advanced Business Verification
+
+## Overview
+This documentation covers the complete user journey from initial app registration, login, KYC verification, to achieving advanced business verification (Merchant Type C) in the sManager application. Each step includes detailed cURL commands using production URLs.
+
+## Production Base URLs
+- **API Gateway**: `https://api-gateway.shebapay.xyz:4443/`
+- **ShebaPayBaseUrl**: `https://api-gateway.shebapay.xyz:4443/gateway/sapi/`
+- **Middleware**: `https://api-gateway.shebapay.xyz:4443/gateway/`
+- **Sheba Manager**: `https://sapi.shebapay.xyz:4052/`
+
+## Merchant Types
+- **Type A**: Basic Account (No KYC)
+- **Type B**: KYC Verified (isKycVerified = 1)
+- **Type C**: Advanced Business Verified (isAdvanceBusinessInfoVerified = 1)
+
+---
+
+## User Journey Flow
+
+```mermaid
+graph TD
+    A[App Installation] --> B[App Registration]
+    B --> C[Send OTP]
+    C --> D[Validate OTP]
+    D --> E[Login Success]
+    E --> F[Check App Config]
+    F --> G{KYC Status Check}
+    G -->|Status 0| H[Start KYC Process]
+    G -->|Status 1| I{Check Advanced Business Status}
+    G -->|Status 2| J[KYC Processing]
+    G -->|Status 3| K[KYC Error - Retry]
+    G -->|Status 4| L[Selfie Pending]
+    G -->|Status 5| M[Under Review]
+    
+    H --> N[KYC Agreement]
+    N --> O[NID Front Image]
+    O --> P[NID Back Image]
+    P --> Q[Face Scan Verification]
+    Q --> R[Submit KYC Data]
+    R --> S[KYC Processing]
+    S --> T{KYC Result}
+    T -->|Success| I
+    T -->|Failed| K
+    
+    I -->|Status 0| U[Start Advanced Business Verification]
+    I -->|Status 1| V[Type C Merchant Complete]
+    I -->|Status 2| W[Business Verification Processing]
+    I -->|Status 3| X[Business Verification Rejected]
+    
+    U --> Y[Business Information Setup]
+    Y --> Z[Nominee Information]
+    Z --> AA[SIM Ownership Verification]
+    AA --> BB[Trade License Optional]
+    BB --> CC[Submit Advanced Info]
+    CC --> DD[Advanced Verification Success]
+    DD --> V
+```
+
+---
+
+## Phase 1: User Registration & Login
+
+### Step 0.1: App Registration
+
+Register the user's device and get initial access.
+
+#### API Endpoint
+```bash
+curl -X POST \
+  "https://api-gateway.shebapay.xyz:4443/gateway/umapi/merchant-profile/appregister" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "Username": "01712345678",
+    "FullName": "804832c13b0613a9",
+    "App_Version": "1.0.0",
+    "Phone_Brand": "iPhone",
+    "Phone_Os": "iOS",
+    "Os_Version": "16.0",
+    "LANG": "EN",
+    "Device_Id": "unique_device_identifier_here"
+  }'
+```
+
+#### Request Parameters
+- `Username`: User's mobile number (11 digits)
+- `FullName`: User's full name or device identifier
+- `App_Version`: Current app version
+- `Phone_Brand`: Device brand (iPhone, Samsung, etc.)
+- `Phone_Os`: Operating system (iOS, Android)
+- `Os_Version`: OS version number
+- `LANG`: Language preference (EN/BN)
+- `Device_Id`: Unique device identifier for push notifications
+
+#### Response
+```json
+{
+  "ResponseCode": 200,
+  "ResponseDescription": "User registered successfully",
+  "IsUserExist": false,
+  "TransactionId": "unique_transaction_id"
+}
+```
+
+### Step 0.2: Login Session Token
+
+Get session token for user authentication.
+
+#### API Endpoint
+```bash
+curl -X POST \
+  "https://api-gateway.shebapay.xyz:4443/gateway/umapi/merchant-profile/smanagerloginvalidateotp" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "MSISDN": "01712345678",
+    "Device_Id": "unique_device_identifier_here",
+    "Phone_Brand": "iPhone",
+    "Phone_Os": "iOS"
+  }'
+```
+
+#### Request Parameters
+- `MSISDN`: Mobile number for login
+- `Device_Id`: Same device ID used in registration
+- `Phone_Brand`: Device brand
+- `Phone_Os`: Operating system
+
+#### Response
+```json
+{
+  "ResponseCode": 200,
+  "ResponseDescription": "OTP sent successfully",
+  "Msisdn": "01712345678",
+  "OTPDiff": "120"
+}
+```
+
+### Step 0.3: OTP Validation & Login
+
+Validate the OTP received via SMS to complete login process.
+
+#### API Endpoint
+```bash
+curl -X POST \
+  "https://api-gateway.shebapay.xyz:4443/gateway/umapi/merchant-profile/signUpValidateForMerchant" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "msisdn": "01712345678",
+    "otp": "123456"
+  }'
+```
+
+#### Request Parameters
+- `msisdn`: User's mobile number
+- `otp`: 6-digit OTP received via SMS
+
+#### Response
+```json
+{
+  "ResponseCode": 200,
+  "ResponseDescription": "Login successful",
+  "Msisdn": "01712345678",
+  "shebaAccessToken": "bearer_token_here",
+  "shebaInfo": {
+    "merchantType": "A",
+    "isKycVerified": 0,
+    "isAdvanceBusinessInfoVerified": 0
+  }
+}
+```
+
+**Important**: Save the `shebaAccessToken` for all subsequent API calls. This token must be included in the `Authorization` header as `Bearer {token}`.
+
+---
+
+## Phase 2: KYC Verification Process
+
+### Step 1: App Configuration Check
+
+Check user's current verification status and available features.
+
+### API Endpoint
+```bash
+curl -X GET \
+  "https://api-gateway.shebapay.xyz:4443/gateway/auth/v1/sheba-pay/user_app_config" \
+  -H "Authorization: Bearer {access_token}" \
+  -H "Content-Type: application/json"
+```
+
+### Response Structure
+```json
+{
+  "issuccess": true,
+  "statusCode": 200,
+  "data": {
+    "isKycVerified": 0,  // 0=Un-verified, 1=Verified, 2=Processing, 3=Error, 4=Selfie Pending, 5=Under Review
+    "isAdvanceBusinessInfoVerified": -1,  // -1=Not Started, 0=Un-verified, 1=Verified, 2=Processing, 3=Rejected
+    "merchantType": "A",  // A=Basic, B=KYC Verified, C=Advanced Business Verified
+    "features": {...}
+  }
+}
+```
+
+---
+
+## Step 2: KYC Status Handling
+
+Based on the `isKycVerified` status from Step 1, proceed with appropriate action.
+
+### Status 0: Start KYC Process
+
+#### Step 2.1: KYC Agreement & NID Front Image Upload
+
+**Upload NID Front Image:**
+```bash
+curl -X POST \
+  "https://api-gateway.shebapay.xyz:4443/gateway/sapi/fsapi/image-upload/single" \
+  -H "Authorization: Bearer {access_token}" \
+  -H "Content-Type: multipart/form-data" \
+  -F "image=@/path/to/nid_front.jpg" \
+  -F "type=nid_front"
+```
+
+#### Step 2.2: NID Back Image Upload
+
+**Upload NID Back Image:**
+```bash
+curl -X POST \
+  "https://api-gateway.shebapay.xyz:4443/gateway/sapi/fsapi/image-upload/single" \
+  -H "Authorization: Bearer {access_token}" \
+  -H "Content-Type: multipart/form-data" \
+  -F "image=@/path/to/nid_back.jpg" \
+  -F "type=nid_back"
+```
+
+#### Step 2.3: Selfie Image Upload
+
+**Upload Selfie:**
+```bash
+curl -X POST \
+  "https://api-gateway.shebapay.xyz:4443/gateway/sapi/fsapi/image-upload/single" \
+  -H "Authorization: Bearer {access_token}" \
+  -H "Content-Type: multipart/form-data" \
+  -F "image=@/path/to/selfie.jpg" \
+  -F "type=selfie"
+```
+
+#### Step 2.4: Submit Complete KYC Data
+
+**Submit KYC Information:**
+```bash
+curl -X POST \
+  "https://api-gateway.shebapay.xyz:4443/gateway/sapi/registration/accountregistration/v2/submit_kyc" \
+  -H "Authorization: Bearer {access_token}" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "dob": "1990-01-01",
+    "keyword": "merchant",
+    "msisdn": "01700000000",
+    "nidBackImage": "https://image-url/nid_back.jpg",
+    "nidFrontImage": "https://image-url/nid_front.jpg",
+    "nidNumber": "1234567890123",
+    "selfiImage": "https://image-url/selfie.jpg",
+    "nameEn": "John Doe",
+    "gender": "male"
+  }'
+```
+
+### Status 1: KYC Verified - Proceed to Advanced Business Check
+
+User is KYC verified (Type B Merchant). Check advanced business verification status.
+
+### Status 2, 4, 5: KYC Processing/Under Review
+
+**Check KYC Status Periodically:**
+```bash
+curl -X GET \
+  "https://api-gateway.shebapay.xyz:4443/gateway/auth/v1/sheba-pay/user_app_config" \
+  -H "Authorization: Bearer {access_token}" \
+  -H "Content-Type: application/json"
+```
+
+### Status 3: KYC Error - Retry KYC Process
+
+Return to Step 2.1 and restart KYC process with better quality images.
+
+---
+
+## Step 3: Advanced Business Verification Process
+
+Once KYC is verified (status = 1), check `isAdvanceBusinessInfoVerified` status:
+
+### Status 0: Start Advanced Business Verification
+
+#### Step 3.1: Get Business Types
+
+**Fetch Available Business Types:**
+```bash
+curl -X GET \
+  "https://api-gateway.shebapay.xyz:4443/gateway/sapi/registration/accountregistration/smanagerBusinessType" \
+  -H "Authorization: Bearer {access_token}" \
+  -H "Content-Type: application/json"
+```
+
+#### Step 3.2: Get Location Data
+
+**Get Divisions:**
+```bash
+curl -X GET \
+  "https://api-gateway.shebapay.xyz:4443/gateway/sapi/registration/location/getDivision" \
+  -H "Authorization: Bearer {access_token}" \
+  -H "Content-Type: application/json"
+```
+
+**Get Districts:**
+```bash
+curl -X GET \
+  "https://api-gateway.shebapay.xyz:4443/gateway/sapi/registration/location" \
+  -H "Authorization: Bearer {access_token}" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "divisionId": 1
+  }'
+```
+
+**Get Thanas:**
+```bash
+curl -X GET \
+  "https://api-gateway.shebapay.xyz:4443/gateway/sapi/registration/location/district" \
+  -H "Authorization: Bearer {access_token}" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "districtId": 1
+  }'
+```
+
+#### Step 3.3: Upload Business Images
+
+**Upload Shop Image (for Offline/Hybrid Business):**
+```bash
+curl -X POST \
+  "https://api-gateway.shebapay.xyz:4443/gateway/sapi/fsapi/image-upload/single" \
+  -H "Authorization: Bearer {access_token}" \
+  -H "Content-Type: multipart/form-data" \
+  -F "image=@/path/to/shop_image.jpg" \
+  -F "type=shop_image"
+```
+
+**Upload Shop Video (Optional):**
+```bash
+curl -X POST \
+  "https://api-gateway.shebapay.xyz:4443/gateway/sapi/fsapi/image-upload/single" \
+  -H "Authorization: Bearer {access_token}" \
+  -H "Content-Type: multipart/form-data" \
+  -F "image=@/path/to/shop_video.mp4" \
+  -F "type=shop_video"
+```
+
+#### Step 3.4: Upload SIM Ownership Screenshot
+
+**Upload SIM Ownership Proof:**
+```bash
+curl -X POST \
+  "https://api-gateway.shebapay.xyz:4443/gateway/sapi/fsapi/image-upload/single" \
+  -H "Authorization: Bearer {access_token}" \
+  -H "Content-Type: multipart/form-data" \
+  -F "image=@/path/to/sim_ownership.jpg" \
+  -F "type=sim_ownership"
+```
+
+#### Step 3.5: Upload Trade License (Optional)
+
+**Upload Trade License Document:**
+```bash
+curl -X POST \
+  "https://api-gateway.shebapay.xyz:4443/gateway/sapi/fsapi/image-upload/single" \
+  -H "Authorization: Bearer {access_token}" \
+  -H "Content-Type: multipart/form-data" \
+  -F "image=@/path/to/trade_license.jpg" \
+  -F "type=trade_license"
+```
+
+#### Step 3.6: Submit Complete Advanced Business Information
+
+**Submit Advanced Business Info:**
+```bash
+curl -X POST \
+  "https://api-gateway.shebapay.xyz:4443/gateway/sapi/registration/accountregistration/submitUserAdvanceInfo" \
+  -H "Authorization: Bearer {access_token}" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "msisdn": "01700000000",
+    "businessType": "3",
+    "shopImageUrl": "https://image-url/shop.jpg",
+    "shopVideoUrl": "https://image-url/shop_video.mp4",
+    "websiteLink": "https://mybusiness.com",
+    "dbid": "12345678",
+    "nomineeRelation": "father",
+    "nomineeName": "John Doe Sr",
+    "nomineeDOB": "1970-01-01",
+    "isNIDAddress": true,
+    "permanentAddress": "123 Business Street, Dhaka",
+    "permanentDivision": "1",
+    "permanentDistrict": "1", 
+    "permanentThana": "1",
+    "simOwnershipImageUrl": "https://image-url/sim_ownership.jpg",
+    "isTradeLicence": true,
+    "tradeLicenceType": "retail",
+    "tradeLicenceNumber": "TL123456789",
+    "tradeLicenceIssuer": "Dhaka City Corporation",
+    "expiryDate": "2025-12-31",
+    "tradeLicenceImageUrl": "https://image-url/trade_license.jpg"
+  }'
+```
+
+### Status 1: Advanced Business Verified (Type C Merchant)
+
+User has achieved the highest verification level. All features are unlocked.
+
+### Status 2: Processing
+
+**Monitor Status:**
+```bash
+curl -X GET \
+  "https://api-gateway.shebapay.xyz:4443/gateway/auth/v1/sheba-pay/user_app_config" \
+  -H "Authorization: Bearer {access_token}" \
+  -H "Content-Type: application/json"
+```
+
+### Status 3: Rejected
+
+Return to Step 3.1 and restart advanced business verification with corrected information.
+
+---
+
+## Step 4: Final Verification Check
+
+After completing all steps, verify the user has achieved Type C merchant status:
+
+**Final Status Check:**
+```bash
+curl -X GET \
+  "https://api-gateway.shebapay.xyz:4443/gateway/auth/v1/sheba-pay/user_app_config" \
+  -H "Authorization: Bearer {access_token}" \
+  -H "Content-Type: application/json"
+```
+
+**Expected Response for Type C Merchant:**
+```json
+{
+  "issuccess": true,
+  "statusCode": 200,
+  "data": {
+    "isKycVerified": 1,
+    "isAdvanceBusinessInfoVerified": 1,
+    "merchantType": "C",
+    "features": {
+      "all_features_unlocked": true
+    }
+  }
+}
+```
+
+---
+
+## Business Types Mapping
+
+### Business Type Selection
+- **1**: Online Business
+- **2**: Offline Business  
+- **3**: Both (Online + Offline)
+
+### Nominee Relationship Options
+- **মা** (Mother)
+- **বাবা** (Father)
+- **ভাই** (Brother)
+- **বোন** (Sister)
+- **স্বামী** (Husband)
+- **স্ত্রী** (Wife)
+- **ছেলে** (Son)
+- **মেয়ে** (Daughter)
+- **বন্ধু** (Friend)
+- **সহকর্মী** (Colleague)
+
+---
+
+## Error Handling
+
+### Common HTTP Status Codes
+- **200**: Success
+- **400**: Bad Request - Invalid data
+- **401**: Unauthorized - Invalid/expired token
+- **403**: Forbidden - Insufficient permissions
+- **422**: Validation Error - Check required fields
+- **500**: Internal Server Error - Contact support
+
+### KYC Status Codes
+- **0**: Un-Verified - Start KYC
+- **1**: Verified - Proceed to advanced verification
+- **2**: Processing - Wait and check status
+- **3**: NID Validation Error - Retry with clearer images
+- **4**: Selfie Verification Pending - Complete face scan
+- **5**: Under Review - Manual verification in progress
+
+### Advanced Business Status Codes
+- **-1**: Not Started - Begin verification process
+- **0**: Un-Verified - Start advanced verification
+- **1**: Verified - Type C merchant achieved
+- **2**: Processing - Wait for approval
+- **3**: Rejected - Retry with corrected information
+
+---
+
+## Required Headers for All API Calls
+
+```bash
+-H "Authorization: Bearer {access_token}"
+-H "Content-Type: application/json"
+-H "Accept: application/json"
+-H "User-Agent: sManager/1.0"
+```
+
+---
+
+## Success Criteria
+
+User successfully achieves **Type C Merchant** status when:
+
+1. ✅ **KYC Verified**: `isKycVerified = 1`
+2. ✅ **Advanced Business Verified**: `isAdvanceBusinessInfoVerified = 1`
+3. ✅ **Merchant Type**: `merchantType = "C"`
+4. ✅ **All Features Unlocked**: Full access to all sManager features
+
+This completes the journey from basic account to fully verified Type C merchant with advanced business verification.
